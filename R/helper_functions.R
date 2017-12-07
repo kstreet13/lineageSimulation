@@ -1,0 +1,956 @@
+waterfall_pst <-function(redX, k=NULL, seed=1, x.reverse=F){
+  source('~/Projects/slingshot_extras/WaterfallSupplement/Waterfall.R')
+  y <- redX
+  # r <- prcomp(t(x))
+  # y <- r$x*matrix(r$sdev^2/sum(r$sdev^2),nrow=nrow(r$x),ncol=ncol(r$x),byrow=T)
+  #y <-y[order(y[,1]),]
+  #u <- r$rotation
+  
+  # kmeans
+  set.seed(seed)
+  r <- kmeans(y,k)
+  z <- r$centers
+  z <- z[order(z[,1]),]
+  rownames(z) <-paste0("t",1:nrow(z))
+  m <- ape::mst(dist(z))
+  
+  t.names <-names(which(colSums(m!=0)==1))[1] # There are two ends, then use the left most one.
+  for (i in 1:nrow(m)){
+    t.names <-append(t.names,names(which(m[t.names[i],]==1))[which(names(which(m[t.names[i],]==1)) %notin% t.names)])
+  }
+  
+  y2d <-y[,1:2]
+  #y2d <-y2d[order(y2d[,1]),]
+  z2d <-z[,1:2]
+  z2d <-z2d[t.names,]
+  
+  time_start.i <-0
+  updatethis.dist <-rep(Inf,nrow(y2d))
+  updatethis.time <-rep(0,nrow(y2d))
+  update.updown <-rep(0,nrow(y2d))
+  pseudotime.flow <-c(0)
+  
+  for (i in 1:(nrow(z2d)-1)){
+    
+    # distance between this z2d.i and all y2d
+    dot.dist.i <-apply(y2d,1,function(X){dist(rbind(X,z2d[i,]))})
+    
+    # distance between this z2d.i-z2d.i+1 segment and "insider" y2d
+    inside_this_segment <-which(apply(y2d,1,function(X){inside_check.foo(z2d[i,],z2d[i+1,],X)}))
+    seg.dist.i <-rep(Inf,nrow(y2d))
+    seg.dist.i[inside_this_segment] <-apply(y2d,1,function(X){distance.foo(z2d[i,],z2d[i+1,],X)})[inside_this_segment]
+    
+    # intersect coordinate between this z2d.i-z2d.i+1 segment and all y2d
+    intersect.i <-t(apply(y2d,1,function(X){intersect.foo(z2d[i,],z2d[i+1,],X)}))
+    
+    # this z2d.i-z2d.i+1 segment's unit vector
+    seg_unit_vector <-unit_vector.foo(z2d[i,],z2d[i+1,])
+    
+    # UPDATE
+    # 2. idx for the shortest distance at this round (either dot or seg)
+    update.idx <-apply(cbind(dot.dist.i,seg.dist.i,updatethis.dist),1,which.min)
+    # 3. update the pseudotime for y2ds with the short distance from the z2d.i
+    updatethis.time[which(update.idx==1)] <-time_start.i
+    # 4. update the pseudotime for y2ds with the short distance from the z2d.i-z2d.i+1 segment
+    relative_cordinates <-t(apply(intersect.i[which(update.idx==2),],1,function(X){seg_unit_vector%*%(X-z2d[i,])}))
+    updatethis.time[which(update.idx==2)] <-time_start.i + relative_cordinates
+    # 1. update the shortest distance
+    updatethis.dist <-apply(cbind(dot.dist.i,seg.dist.i,updatethis.dist),1,min)
+    
+    update.updown[which(update.idx==1)] <-c(apply(y2d,1,function(X){crossvec_direction(z2d[i,],z2d[i+1,],X)})*dot.dist.i)[which(update.idx==1)]
+    update.updown[which(update.idx==2)] <-c(apply(y2d,1,function(X){crossvec_direction(z2d[i,],z2d[i+1,],X)})*seg.dist.i)[which(update.idx==2)]
+    
+    # update time for the next round
+    time_start.i <-time_start.i + dist(rbind(z2d[i,],z2d[i+1,]))
+    pseudotime.flow <-append(pseudotime.flow,time_start.i)
+  }
+  
+  # For the y2ds that are closest to the starting z2d
+  i=1
+  dot.dist.i <-apply(y2d,1,function(X){dist(rbind(X,z2d[i,]))})
+  if (length(start.idx <-which(dot.dist.i <= updatethis.dist))>0){
+    intersect.i <-t(apply(y2d,1,function(X){intersect.foo(z2d[i,],z2d[i+1,],X)}))
+    seg_unit_vector <-unit_vector.foo(z2d[i,],z2d[i+1,])
+    relative_cordinates <-0 + t(apply(intersect.i,1,function(X){seg_unit_vector %*% (X-z2d[i,])}))[start.idx]
+    updatethis.time[start.idx] <-relative_cordinates
+    seg.dist.i <-apply(y2d,1,function(X){distance.foo(z2d[i,],z2d[i+1,],X)})
+    update.updown[start.idx] <-c(apply(y2d,1,function(X){crossvec_direction(z2d[i,],z2d[i+1,],X)})*seg.dist.i)[start.idx]
+  }
+  # For the y2ds that are closest to the arriving z2d
+  i=nrow(z2d)
+  dot.dist.i <-apply(y2d,1,function(X){dist(rbind(X,z2d[i,]))})
+  if (length(arrive.idx <-which(dot.dist.i <= updatethis.dist))>0){
+    intersect.i <-t(apply(y2d,1,function(X){intersect.foo(z2d[i-1,],z2d[i,],X)}))
+    seg_unit_vector <-unit_vector.foo(z2d[i-1,],z2d[i,])
+    relative_cordinates <-time_start.i + as.numeric(t(apply(intersect.i,1,function(X){seg_unit_vector %*% (X-z2d[i,])})))[arrive.idx]
+    updatethis.time[arrive.idx] <-relative_cordinates
+    seg.dist.i <-apply(y2d,1,function(X){distance.foo(z2d[i-1,],z2d[i,],X)})
+    update.updown[arrive.idx] <-c(apply(y2d,1,function(X){crossvec_direction(z2d[i-1,],z2d[i,],X)})*seg.dist.i)[arrive.idx]
+  }
+  
+  pseudotime <-updatethis.time
+  pseudotime.y <-update.updown
+  pseudotime.flow <-pseudotime.flow
+  
+  if (x.reverse==T){
+    pseudotime <- -pseudotime
+    pseudotime.flow <- -pseudotime.flow
+  }
+  
+  pseudotime_range <-max(pseudotime)-min(pseudotime)
+  
+  pseudotime.flow <-pseudotime.flow-min(pseudotime)
+  pseudotime.flow <-pseudotime.flow/pseudotime_range
+  
+  pseudotime <-pseudotime-min(pseudotime)
+  pseudotime <-pseudotime/pseudotime_range
+
+  return(pseudotime)
+  
+}
+
+slingshot_pst <- function(redX, clus.labels, ...){
+  require(slingshot)
+  l <- get_lineages(redX, clus.labels, ...)
+  c <- get_curves(redX, clus.labels, l)
+  out <- sapply(c,function(i){i$pseudotime})
+  return(out)
+}
+
+monocle_pst <- function(redX, num_paths = 1, reverse=FALSE, mst.out=FALSE){
+  require(monocle)
+  require(combinat)
+  require(igraph)
+  require(dplyr)
+  source('~/Documents/R_packages/monocle-release-master/R/methods-CellDataSet.R')
+  root_cell = NULL
+  dp <- as.matrix(dist(redX))
+  cellPairwiseDistances <- dp
+  gp <- graph.adjacency(dp, mode = "undirected", weighted = TRUE)
+  dp_mst <- minimum.spanning.tree(gp)
+  minSpanningTree <- dp_mst
+  next_node <<- 0
+  res <- pq_helper(dp_mst, use_weights = FALSE, root_node = root_cell)
+  cc_ordering <- extract_good_branched_ordering(res$subtree, 
+                                            res$root, cellPairwiseDistances, num_paths, reverse)
+  row.names(cc_ordering) <- cc_ordering$sample_name
+  pseudotime <- cc_ordering[row.names(redX), ]$pseudo_time
+  #state <- cc_ordering[row.names(pData(cds)), ]$cell_state
+  if(reverse){
+    pseudotime <- max(pseudotime) - pseudotime
+  }
+  if(mst.out){
+    out <- list(pseudotime = pseudotime, MST = minSpanningTree)
+  }else{
+    out <- pseudotime
+  }
+  return(out)
+}
+
+tscan_pst <- function(counts, preproc = FALSE, clusNum = 2:9,
+                      smallestOKcluster = 1, start.cell){
+  require(TSCAN)
+  require(igraph)
+  if(preproc){
+    counts <- preprocess(counts)
+  }
+  counts <- counts[apply(counts,1,var) > 0, ]
+  counts.orig <- counts
+  clust <- exprmclust(counts, clusternum = clusNum)
+  
+  minClusSize <- min(table(clust$clusterid))
+  while(minClusSize < smallestOKcluster){
+    clTab <- table(clust$clusterid)
+    smallClus <- names(clTab)[clTab < smallestOKcluster]
+    counts <- counts[, ! clust$clusterid %in% smallClus]
+    counts <- counts[apply(counts,1,var) > 0, ]
+    clust <- exprmclust(counts, clusternum = clusNum)
+    minClusSize <- min(table(clust$clusterid))
+    if(ncol(counts) < .5*ncol(counts.orig)){
+      counts <- counts.orig
+      clust <- exprmclust(counts, clusternum = clusNum)
+      minClusSize <- smallestOKcluster + 1
+    }
+  }
+  
+  #start.cell <- colnames(sim)[which.min(sim$Step)]
+  clus1 <- clust$clusterid[names(clust$clusterid)==start.cell]
+  
+  # define lineages as in Slingshot, ordered list of clusters
+  lineages <- list()
+  g <- clust$MSTtree
+  tree <- as.matrix(as_adj(g))
+  degree <- rowSums(tree)
+  ends <- rownames(tree)[degree == 1 & rownames(tree) != clus1]
+  paths <- shortest_paths(g, from = clus1, to = ends, mode = 'out', output = 'vpath')$vpath
+  for(p in paths){
+    lineages[[length(lineages)+1]] <- names(p)
+  }
+  
+  pst <- sapply(lineages,function(l){
+    ord <- TSCANorder(clust, MSTorder = as.numeric(l), orderonly = FALSE)
+    return(ord$Pseudotime[match(colnames(counts.orig), ord$sample_name)])
+  })
+  rownames(pst) <- colnames(counts.orig)
+  colnames(pst) <- paste0('Lineage',1:length(lineages))
+  
+  return(pst)
+}
+
+tscan_sling_pst <- function(counts, preproc = FALSE, clusNum = 2:9, 
+                            smallestOKcluster = 1, start.cell){
+  require(TSCAN)
+  require(igraph)
+  require(slingshot)
+  if(preproc){
+    counts <- preprocess(counts)
+  }
+  counts <- counts[apply(counts,1,var) > 0, ]
+  counts.orig <- counts
+  clust <- exprmclust(counts, clusternum = clusNum)
+  
+  minClusSize <- min(table(clust$clusterid))
+  while(minClusSize < smallestOKcluster){
+    print(ncol(counts))
+    clTab <- table(clust$clusterid)
+    smallClus <- names(clTab)[clTab < smallestOKcluster]
+    counts <- counts[, ! clust$clusterid %in% smallClus]
+    counts <- counts[apply(counts,1,var) > 0, ]
+    clust <- exprmclust(counts, clusternum = clusNum)
+    minClusSize <- min(table(clust$clusterid))
+    if(ncol(counts) < .5*ncol(counts.orig)){
+      counts <- counts.orig
+      clust <- exprmclust(counts, clusternum = clusNum)
+      minClusSize <- smallestOKcluster + 1
+    }
+  }
+  
+  #start.cell <- colnames(sim)[which.min(sim$Step)]
+  clus1 <- clust$clusterid[names(clust$clusterid)==start.cell]
+  
+  sds <- slingshot(clust$pcareduceres, clust$clusterid, start.clus = clus1)
+  pst <- as.matrix(pseudotime(sds))
+  pst <- pst[match(colnames(counts.orig), rownames(pst)), ,drop = FALSE]
+  rownames(pst) <- colnames(counts.orig)
+  return(pst)
+}
+
+embed <- function (X, genes_for_embedding = NULL, kernel = c("nn", "dist", "heat"),metric = c("correlation", "euclidean", "cosine"),nn = round(log(ncol(X))), eps = NULL, t = NULL,symmetrize = c("mean", "ceil", "floor"), measure_type = c("unorm", "norm"), p = 2){
+  if (is.null(genes_for_embedding)){
+    genes_for_embedding <- 1:nrow(X)
+  }
+  
+  W <- weighted_graph(X[genes_for_embedding, ], kernel = kernel, 
+                      metric = metric, nn = nn, eps = eps, t = t, symmetrize = symmetrize)
+  cellDist <- W
+  LE <- laplacian_eigenmap(W, measure_type = measure_type, 
+                           p = p)
+  return(as.matrix(LE$embedding))
+}
+
+embeddr_pst <- function(redX, clus.labels = NULL, cluster_to_use = NULL, reverse = FALSE, ...){
+  require(embeddr)
+  require(princurve)
+  redX <- as.data.frame(redX)
+  n_cells <- nrow(redX)
+  cells_in_cluster <- rep(TRUE, n_cells)
+  if(!is.null(cluster_to_use)){ 
+    cells_in_cluster <- clus.labels %in% cluster_to_use
+  }
+  Xcl <- redX[cells_in_cluster, ]
+  pc <- principal.curve(x = as.matrix(Xcl), ...)
+  pst <- pc$lambda
+  pst <- (pst - min(pst))/(max(pst) - min(pst))
+  #d <- sqrt(rowSums(X - pc$s)^2)
+  proj_dist <- pseudotime <- trajectory_1 <- trajectory_2 <- rep(NA,n_cells)
+  pseudotime[cells_in_cluster] <- pst
+  trajectory_1[cells_in_cluster] <- pc$s[, 1]
+  trajectory_2[cells_in_cluster] <- pc$s[, 2]
+  #proj_dist[cells_in_cluster] <- d
+  if(reverse){
+    pseudotime <- 1-pseudotime
+  }
+  return(pseudotime)
+}
+
+mon2_pst <- function(sim, ndims=2, PCgenes = FALSE){
+  require(monocle)
+  require(igraph)
+  start.cell <- colnames(sim)[which.min(sim$Step)]
+  rowData(sim)$gene_short_name <- rownames(sim)
+  cds <- newCellDataSet(cellData = assays(sim)$normcounts, phenoData = AnnotatedDataFrame(as.data.frame(colData(sim))), featureData = AnnotatedDataFrame(as.data.frame(rowData(sim),row.names=rownames(sim))))
+  cds <- estimateSizeFactors(cds)
+  if(PCgenes){
+    ordering_genes <- ordering_genes_pca(cds, which.pcs = seq_len(ndims))
+  }else{
+    ordering_genes <- rownames(cds)
+  }
+  cds <- setOrderingFilter(cds, ordering_genes)
+  if(ncol(sim)==100){
+    ncenter <- 99
+  }else{
+    ncenter <- NULL
+  }
+  cds <- reduceDimension(cds, reduction_method = 'DDRTree', ncenter = ncenter, max_components = ndims)
+  cds <- orderCells(cds)
+  state1 <- as.character(cds$State[which.max(colnames(cds)==start.cell)])
+  if(length(cds@auxOrderingData[[cds@dim_reduce_type]]$root_cell)==0){
+    cds@auxOrderingData[[cds@dim_reduce_type]]$root_cell <- rownames(pData(cds))[which.min(cds$Pseudotime)]
+  }
+  cds <- orderCells(cds, root_state = state1)
+  if(length(cds@auxOrderingData[[cds@dim_reduce_type]]$root_cell)==0){
+    cds@auxOrderingData[[cds@dim_reduce_type]]$root_cell <- rownames(pData(cds))[which.min(cds$Pseudotime)]
+  }
+  
+  state1 <- as.character(cds$State[which.max(colnames(cds)==cds@auxOrderingData[[cds@dim_reduce_type]]$root_cell)])
+  nBranches <- length(cds@auxOrderingData$DDRTree$branch_points)
+  
+  if(nBranches > 0){
+    nonStartStates <- unique(cds$State)
+    nonStartStates <- nonStartStates[nonStartStates != state1]
+    
+    linInds <- lapply(nonStartStates,function(leafState){
+      index <- tryCatch(
+        getLineageID(cds,leafState),
+        error=function(e) e
+      )
+      if(inherits(index, "error")) return(NULL)
+      return(index)
+    })
+    linInds <- do.call("cbind", linInds)
+    # #remove column if any other column is a subset
+    # keep <- sapply(1:ncol(linInds),function(i){
+    #   all(nonsubset <- sapply(1:ncol(linInds),function(j){
+    #     if(i==j){
+    #       return(TRUE)
+    #     }
+    #     if(all(linInds[linInds[,j],i])){
+    #       return(FALSE)
+    #     }else{
+    #       return(TRUE)
+    #     }
+    #   }))
+    # })
+    # linInds <- linInds[,keep]
+    pseudotime <- matrix(rep(cds$Pseudotime,ncol(linInds)), ncol = ncol(linInds))
+    pseudotime[!linInds] <- NA
+    ncellsLin <- apply(pseudotime,2,function(x){sum(!is.na(x))})
+    pseudotime <- pseudotime[,order(ncellsLin, decreasing = TRUE)]
+    lins <- ncol(pseudotime)
+  }else{
+    pseudotime <- matrix(cds$Pseudotime, ncol = 1)
+    lins <- 1
+  }
+  return(pseudotime)
+}
+
+mon1_pst <- function(sim, ndim = 2, num_paths = NULL, PCgenes = FALSE){
+  require(monocle)
+  require(igraph)
+  start.cell <- colnames(sim)[which.min(sim$Step)]
+  rowData(sim)$gene_short_name <- rownames(sim)
+  cds <- newCellDataSet(cellData = assays(sim)$normcounts, phenoData = AnnotatedDataFrame(as.data.frame(colData(sim))), featureData = AnnotatedDataFrame(as.data.frame(rowData(sim),row.names=rownames(sim))))
+  cds <- estimateSizeFactors(cds)
+  
+  if(PCgenes){
+    ordering_genes <- ordering_genes_pca(cds, which.pcs = seq_len(ndim))
+  }else{
+    ordering_genes <- rownames(cds)
+  }
+  cds <- setOrderingFilter(cds, ordering_genes)
+  cds <- estimateSizeFactors(cds)
+  
+  cds <- reduceDimension(cds, max_components = ndim, reduction_method = "ICA")
+  
+  cds <- orderCells(cds, num_paths = num_paths)
+  
+  state1 <- as.character(cds$State[which.max(colnames(cds)==start.cell)])
+
+  cds <- orderCells(cds, num_paths = num_paths, root_state = state1)
+
+  # formatting output as n x L matrix
+  # (states = clusters)
+  clusLabels <- as.character(cds$State)
+  clusters <- sort(unique(clusLabels))
+  cellCon <- get.adjacency(cds@minSpanningTree)
+  #cluster connectivity matrix
+  clusterCon <- sapply(clusters,function(c1){
+    sapply(clusters,function(c2){
+      if(c1==c2){
+        return(0)
+      }
+      ind1 <- clusLabels == c1
+      ind2 <- clusLabels == c2
+      return(max(cellCon[ind1,ind2]))
+    })
+  })
+  g <- graph.adjacency(clusterCon, mode="undirected")
+  start <- clusLabels[which.min(cds$Pseudotime)]
+  ends <- clusters[(length(clusters)-num_paths+1):length(clusters)]
+  paths <- shortest_paths(g, from = start, to = ends, mode = 'out', output = 'vpath')$vpath
+  # define lineages as ordered sets of clusters
+  lineages <- lapply(paths,function(p){
+    lin <- names(p)
+    # each lineage should have only one terminal state
+    # mst geometry can be a little weird, can't rely on 
+    # terminal states to have only one connection
+    terminal <- lin[length(lin)]
+    lin <- lin[! lin %in% ends[ends != terminal]]
+    return(lin)
+  })
+  # extract pseudotime for each lineage
+  pst <- sapply(lineages,function(lin){
+    ind <- clusLabels %in% lin
+    pst <- cds$Pseudotime
+    pst[! ind] <- NA
+    return(pst)
+  })
+  rownames(pst) <- colnames(cds)
+  colnames(pst) <- paste0('Lineage',1:ncol(pst))
+  return(pst)
+}
+
+
+dpt_pst <- function(sim, num_paths = 'full'){
+  num_paths <- as.character(num_paths)
+  start.cell <- colnames(sim)[which.min(sim$Step)]
+  start.ind <- which(colnames(sim)==start.cell)
+  
+  dm <- DiffusionMap(t(log1p(assays(sim)$normcounts)))
+  dpt <- DPT(dm, tips = start.ind)
+  
+  pst.vec <- dpt[start.ind,]
+  bm <- dpt@branch
+  
+  if(num_paths=='full'){
+    if(sum(bm[,1] %in% 2:3) == 0){
+      # one lineage
+      pst <- as.matrix(pst.vec, ncol=1)
+      rownames(pst) <- colnames(sim)
+      colnames(pst) <- paste0('Lineage',1:ncol(pst))
+      return(pst)
+    }
+    lineages <- list(c(1,2), c(1,3))
+    ends <- 2:3
+    if(max(bm,na.rm = TRUE)==3){
+      done <- TRUE
+    }else{
+      done <- FALSE
+    }
+    while(! done){
+      length.old <- length(lineages)
+      ends <- sapply(lineages, function(lin){ lin[length(lin)] })
+      ends <- ends[!is.na(ends)]
+      endcols <- sapply(ends,function(end){
+        which(sapply(1:ncol(bm),function(j){ end %in% bm[,j]}))
+      })
+      to.split <- ends[endcols < ncol(bm)]
+      to.split <- to.split[order(table(bm)[to.split], decreasing = TRUE)]
+      
+      for(end in to.split){
+        endcol <- which(sapply(1:ncol(bm),function(j){ end %in% bm[,j]}))
+        
+        new <- unique(bm[bm[,endcol]==end, endcol+1])
+        new <- new[! is.na(new)]
+        if(length(new)==0){
+          next
+        }
+        lin <- lineages[[which(ends==end)]]
+        lin <- lin[-length(lin)]
+        lineages <- lineages[ends != end]
+        new.ends <- new[new %% 3 != 1]
+        new.root <- new[new %% 3 == 1]
+        lineages[[length(lineages)+1]] <- c(lin, new.root, new.ends[1])
+        lineages[[length(lineages)+1]] <- c(lin, new.root, new.ends[2])
+        break
+      }
+      if(length(lineages)==length.old){
+        done <- TRUE
+      }
+    }
+    linInds <- lapply(lineages,function(lin){
+      apply(bm,1,function(bm.i){
+        any(bm.i %in% lin)
+      })
+    })
+    pst <- sapply(linInds,function(ind){
+      out <- pst.vec
+      out[! ind] <- NA
+      return(out)
+    })
+    rownames(pst) <- colnames(sim)
+    colnames(pst) <- paste0('Lineage',1:ncol(pst))
+    return(pst)
+  }
+  if(as.numeric(num_paths) == 1){
+    pst <- as.matrix(pst.vec, ncol=1)
+    rownames(pst) <- colnames(sim)
+    colnames(pst) <- paste0('Lineage',1:ncol(pst))
+    return(pst)
+  }
+  if(as.numeric(num_paths) %in% 2:20){
+    lineages <- list(c(1,2), c(1,3))
+    ends <- 2:3
+    if(as.numeric(num_paths)==2 | max(bm,na.rm = TRUE)==3){
+      done <- TRUE
+    }else{
+      done <- FALSE
+    }
+    while(! done){
+      length.old <- length(lineages)
+      ends <- sapply(lineages, function(lin){ lin[length(lin)] })
+      ends <- ends[!is.na(ends)]
+      endcols <- sapply(ends,function(end){
+        which(sapply(1:ncol(bm),function(j){ end %in% bm[,j]}))
+      })
+      to.split <- ends[endcols < ncol(bm)]
+      to.split <- to.split[order(table(bm)[to.split], decreasing = TRUE)]
+      
+      for(end in to.split){
+        endcol <- which(sapply(1:ncol(bm),function(j){ end %in% bm[,j]}))
+        
+        new <- unique(bm[bm[,endcol]==end, endcol+1])
+        new <- new[! is.na(new)]
+        if(length(new)==0){
+          next
+        }
+        lin <- lineages[[which(ends==end)]]
+        lin <- lin[-length(lin)]
+        lineages <- lineages[ends != end]
+        new.ends <- new[new %% 3 != 1]
+        new.root <- new[new %% 3 == 1]
+        lineages[[length(lineages)+1]] <- c(lin, new.root, new.ends[1])
+        lineages[[length(lineages)+1]] <- c(lin, new.root, new.ends[2])
+        break
+      }
+      if(length(lineages)==length.old | length(lineages) == num_paths){
+        done <- TRUE
+      }
+    }
+    linInds <- lapply(lineages,function(lin){
+      apply(bm,1,function(bm.i){
+        any(bm.i %in% lin)
+      })
+    })
+    pst <- sapply(linInds,function(ind){
+      out <- pst.vec
+      out[! ind] <- NA
+      return(out)
+    })
+    rownames(pst) <- colnames(sim)
+    colnames(pst) <- paste0('Lineage',1:ncol(pst))
+    return(pst)
+  }
+  stop('Unrecognized num_paths argument.')
+}
+
+
+mst_pst <- function(X, clusterLabels, clus1){
+  require(slingshot)
+  sds <- getLineages(X, clusterLabels, start.clus = clus1)
+  lineages <- sds@lineages
+  
+  L <- length(grep("Lineage",names(lineages))) # number of lineages
+  clusters <- unique(clusterLabels)
+  d <- dim(X); n <- d[1]; p <- d[2]
+  nclus <- length(clusters)
+  centers <- t(sapply(clusters,function(clID){
+    x.sub <- X[clusterLabels == clID, ,drop = FALSE]
+    return(colMeans(x.sub))
+  }))
+  if(p == 1){
+    centers <- t(centers)
+  }
+  rownames(centers) <- clusters
+  W <- sapply(seq_len(L),function(l){
+    as.numeric(clusterLabels %in% lineages[[l]])
+  }) # weighting matrix
+  rownames(W) <- rownames(X)
+  colnames(W) <- names(lineages)[seq_len(L)]
+  W.orig <- W
+  D <- W; D[,] <- NA
+  
+  # determine curve hierarchy
+  C <- as.matrix(sapply(lineages[seq_len(L)], function(lin) {
+    sapply(clusters, function(clID) {
+      as.numeric(clID %in% lin)
+    })
+  }))
+  rownames(C) <- clusters
+  segmnts <- unique(C[rowSums(C)>1,,drop = FALSE])
+  segmnts <- segmnts[order(rowSums(segmnts),decreasing = FALSE), ,
+                     drop = FALSE]
+  avg.order <- list()
+  for(i in seq_len(nrow(segmnts))){
+    idx <- segmnts[i,] == 1
+    avg.order[[i]] <- colnames(segmnts)[idx]
+    new.col <- rowMeans(segmnts[,idx, drop = FALSE])
+    segmnts <- cbind(segmnts[, !idx, drop = FALSE],new.col)
+    colnames(segmnts)[ncol(segmnts)] <- paste('average',i,sep='')
+  }
+  
+  # initial curves are piecewise linear paths through the tree
+  pcurves <- list()
+  for(l in seq_len(L)){
+    idx <- W[,l] > 0
+    clus.sub <- clusterLabels[idx]
+    line.initial <- centers[clusters %in% lineages[[l]], , 
+                            drop = FALSE]
+    line.initial <- line.initial[match(lineages[[l]],
+                                       rownames(line.initial)),  ,
+                                 drop = FALSE]
+    K <- nrow(line.initial)
+    # special case: single-cluster lineage
+    if(K == 1){
+      pca <- prcomp(X[idx, ,drop = FALSE])
+      ctr <- line.initial
+      line.initial <- rbind(ctr - 10*pca$sdev[1] * 
+                              pca$rotation[,1], ctr, 
+                            ctr + 10*pca$sdev[1] *
+                              pca$rotation[,1])
+      curve <- get.lam(X[idx, ,drop = FALSE], s = line.initial,
+                        stretch = 9999)
+      # do this twice because all points should have projections
+      # on all lineages, but only those points on the lineage
+      # should extend it
+      pcurve <- get.lam(X, s = curve$s[curve$tag,], stretch=0)
+      pcurve$lambda <- pcurve$lambda - min(pcurve$lambda, 
+                                           na.rm=TRUE)
+      # ^ force pseudotime to start at 0
+      pcurve$w <- W[,l]
+      pcurves[[l]] <- pcurve
+      D[,l] <- abs(pcurve$dist)
+      next
+    }
+    
+    curve <- get.lam(X[idx, ,drop = FALSE], s = line.initial,
+                      stretch = 9999)
+    
+    pcurve <- get.lam(X, s = curve$s[curve$tag, ,drop=FALSE], 
+                       stretch=0)
+    # force pseudotime to start at 0
+    pcurve$lambda <- pcurve$lambda - min(pcurve$lambda, 
+                                         na.rm=TRUE) 
+    pcurve$w <- W[,l]
+    pcurves[[l]] <- pcurve
+    D[,l] <- abs(pcurve$dist)
+  }
+  pst <- sapply(pcurves,function(x){
+    x$lambda
+  })
+  pst[W==0] <- NA
+  colnames(pst) <- paste0('Lineage',1:ncol(pst))
+  rownames(pst) <- rownames(X)
+  return(pst)
+}
+
+
+ordering_genes_pca <- function(cds, which.pcs = c(2,3)){
+  exprs_filtered <- t(t(exprs(cds)/pData(cds)$Size_Factor))
+  nz_genes <- which(exprs_filtered != 0)
+  exprs_filtered[nz_genes] <- log(exprs_filtered[nz_genes] + 1)
+  # Calculate the variance across genes without converting to a dense
+  # matrix:
+  expression_means <- Matrix::rowMeans(exprs_filtered)
+  expression_vars <- Matrix::rowMeans((exprs_filtered - expression_means)^2)
+  # Filter out genes that are constant across all cells:
+  genes_to_keep <- expression_vars > 0
+  exprs_filtered <- exprs_filtered[genes_to_keep,]
+  expression_means <- expression_means[genes_to_keep]
+  expression_vars <- expression_vars[genes_to_keep]
+  # Here's how to take the top PCA loading genes
+  pca_res <- prcomp(t(exprs_filtered), center=expression_means, scale.=sqrt(expression_vars))$rotation
+  # Take the top 100 genes from components 2 and 3. Component
+  # 1 usually is driven by technical noise.
+  genes.list <- lapply(which.pcs, function(pc){
+    names(sort(abs(pca_res[, pc]), decreasing = T))[1:100]
+  })
+  ordering_genes <- character()
+  for(gl in genes.list){
+    ordering_genes <- union(ordering_genes, gl)
+  }
+  return(ordering_genes)
+}
+
+
+scaleAB <- function(x,a=0,b=1){
+  ((x-min(x,na.rm=TRUE))/(max(x,na.rm=TRUE)-min(x,na.rm=TRUE)))*(b-a)+a
+}
+col.stabilize <- function(x){
+  x <- 2*x
+  y <- 27*x*x*(1-x)/4
+  y[x > 2/3] <- 1
+  return(y)
+}
+
+parallel_plot <- function(x1,x2, names = NULL, ...){
+  x1 <- scaleAB(x1)
+  x2 <- scaleAB(x2)
+  if(length(x1) != length(x2)){
+    stop('pseudotime vectors must have same length')
+  }
+  plot.new(); plot.window(xlim=0:1,ylim=c(.5,2.5))
+  abline(h=1:2,xlab='Pseudotime')
+  axis(1,lty=0); axis(2, at=1:2, labels = names, lty=0)
+  
+  wdt <- scaleAB(abs(x1 - x2),1,4)
+  drk <- col.stabilize(abs(x1 - x2))
+  require(scales)
+  segments(x1,1, x2,2, col = alpha(1,drk), lwd=wdt)
+  segments(x1[is.na(x2)],rep(1,sum(is.na(x2))),x1[is.na(x2)],rep(4/3,sum(is.na(x2))))
+  points(x1,rep(1,length(x1)), pch=16, cex=1.5, ...)
+  segments(x2[is.na(x1)],rep(2,sum(is.na(x1))),x2[is.na(x1)],rep(5/3,sum(is.na(x2))))
+  points(x2,rep(2,length(x2)), pch=16, cex=1.5, ...)
+}
+violinplot <- function(x, col='grey50', names = 1:ncol(x), scale = 1, show.median = TRUE, 
+                       show.box = FALSE, box.big = 5, box.small = 2, bars = FALSE, 
+                       add = FALSE, xlab='', ylab='', width = 1, ...){
+  col <- rep(col, length.out = ncol(x))
+  width <- rep(width, length.out = ncol(x))
+  width <- width / mean(width)
+  
+  xat <- sapply(1:ncol(x),function(i){
+    sum(rep(width,each=2)[1:(2*i-1)])/2
+  })
+  
+  dens <- apply(x,2,density, na.rm=TRUE)
+  xs <- sapply(dens,function(d){d$x})
+  ys <- sapply(dens,function(d){d$y})
+  
+  ys <- ys * .5/max(ys,na.rm=TRUE) * scale
+  
+  if(!add){
+    plot(c(xat[1]-.4*width[1],xat[ncol(x)]+.4*width[ncol(x)]), range(xs,na.rm = TRUE), col='white', xaxt = 'n', xlab=xlab, ylab=ylab, ...)
+    axis(1, at=xat, labels = names, ...)
+  }
+  if(bars){
+    abline(v=xat)
+  }
+  for(i in 1:ncol(x)){
+    xx <- c(xat[i] - ys[,i] * width[i], xat[i] + rev(ys[,i]) * width[i])
+    yy <- c(xs[,i], rev(xs[,i]))
+    polygon(xx,yy, col = col[i])
+  }
+  if(show.box){
+    stats <- boxplot(x, plot=FALSE)$stats
+    segments(x0=xat,y0=stats[1,],y1=stats[5,], lwd=box.small, lend=2)
+    segments(x0=xat,y0=stats[2,],y1=stats[4,], lwd=box.big, lend=2)
+  }
+  if(show.median){
+    points(xat,apply(x,2,median,na.rm=TRUE), col=1, pch=16)
+    points(xat,apply(x,2,median,na.rm=TRUE), col='white', pch=1)
+  }
+  return(invisible(NULL))
+}
+
+
+# s_{\pi_1\pi_2} from TSCAN paper
+Spp <- function(pst1, pst2){
+  pst1 <- as.numeric(pst1)
+  pst2 <- as.numeric(pst2)
+  # nicely formatted pst1, pst2
+  spp <- function(p1,p2){
+    A <- length(p1)
+    cons <- 2/(A*(A-1))
+    sigma <- sapply(seq_len(A),function(i){
+      sapply(seq_len(A-i),function(k){
+        j <- i+k
+        if(any(is.na(c(p1[c(i,j)],p2[c(i,j)])))){
+          return(0)
+        }
+        if((p1[j]-p1[i])*(p2[j]-p2[i]) >= 0){
+          return(1)
+        }
+        return(0)
+      })
+    })
+    return(cons*sum(unlist(sigma)))
+  }
+  if(is.null(names(pst1)) | is.null(names(pst2))){
+    if(length(pst1)==length(pst2)){
+      s <- spp(pst1,pst2)
+    }else{
+      stop('lengths must match or names must be provided')
+    }
+  }else{
+    ns <- union(names(pst1),names(pst2))
+    p1 <- pst1[match(ns,names(pst1))]
+    p2 <- pst2[match(ns,names(pst2))]
+    s <- spp(p1,p2)
+  }
+  return(s)
+}
+
+
+
+
+# evaluation
+kendall.mod <- function(pst1, pst2){
+  # nicely formatted pst1, pst2
+  spp <- function(p1,p2){
+    A <- length(p1)
+    d1 <- sign(outer(p1,p1,'-'))
+    d1 <- d1[upper.tri(d1)]
+    d2 <- sign(outer(p2,p2,'-'))
+    d2 <- d2[upper.tri(d2)]
+    concordance <- 2*(d1 == d2)-1
+    concordance[is.na(concordance)] <- 0
+    return(mean(concordance))
+  }
+  if(class(pst1)=='matrix'){
+    n1 <- rownames(pst1)
+    pst1 <- as.numeric(pst1)
+    names(pst1) <- n1
+  }
+  if(class(pst2)=='matrix'){
+    n2 <- rownames(pst2)
+    pst2 <- as.numeric(pst2)
+    names(pst2) <- n2
+  }
+  if(is.null(names(pst1)) | is.null(names(pst2))){
+    if(length(pst1)==length(pst2)){
+      keep <- !is.na(pst1) | !is.na(pst2)
+      pst1 <- pst1[keep]
+      pst2 <- pst2[keep]
+      s <- spp(pst1,pst2)
+    }else{
+      stop('lengths must match or names must be provided')
+    }
+  }else{
+    ns <- union(names(pst1),names(pst2))
+    p1 <- pst1[match(ns,names(pst1))]
+    p2 <- pst2[match(ns,names(pst2))]
+    keep <- !is.na(p1) | !is.na(p2)
+    p1 <- p1[keep]
+    p2 <- p2[keep]
+    s <- spp(p1,p2)
+  }
+  return(s)
+}
+
+agreement.pair <- function(truth, pst){
+  truth <- as.matrix(truth)
+  pst <- as.matrix(pst)
+  
+  kt.max <- apply(truth,2,function(truth.i){
+    taus <- apply(pst,2,function(pst.j){
+      names(truth.i) <- rownames(truth)
+      names(pst.j) <- rownames(pst)
+      return(kendall.mod(truth.i, pst.j))
+    })
+    return(max(taus,na.rm = TRUE))
+  })
+  return(kt.max)
+}
+
+
+FQnorm <- function(counts){
+  rk <- apply(counts,2,rank)
+  counts.sort <- apply(counts,2,sort)
+  refdist <- apply(counts.sort,1,median)
+  norm <- apply(rk,2,function(r){ refdist[r] })
+  rownames(norm) <- rownames(counts)
+  return(norm)
+}
+UQnorm <- function(counts){
+  uqs <- apply(counts,2, quantile, probs=.75)
+  norm <- t(apply(counts,1,function(x){ x/uqs }))
+  rownames(norm) <- rownames(counts)
+  colnames(norm) <- colnames(counts)
+  return(norm)
+}
+
+
+
+pickBestK <- function(reducedDim, method = 'kmeans', reps = 10){
+  require(cluster)
+  if(method == 'kmeans'){
+    clusterFun <- kmeans
+  }
+  if(method == 'pam'){
+    clusterFun <- pam
+  }
+  asw <- sapply(2:15,function(k){
+    asw.its <- sapply(seq_len(reps), function(i){
+      cl <- clusterFun(reducedDim, k)
+      if(is.null(cl$clustering)){
+        cl$clustering <- cl$cluster
+      }
+      summary(silhouette(cl, dist = dist(reducedDim)))$avg.width
+    })
+    mean(asw.its)
+  })
+  return((2:15)[which.max(asw)])
+}
+
+
+
+# function based on buildBranchCellDataSet
+getLineageID <- function(cds, leaf_state){
+  require(igraph)
+  # checks
+  if (is.null(pData(cds)$State) | is.null(pData(cds)$Pseudotime)) 
+    stop("Please first order the cells in pseudotime using orderCells()")
+  if (is.null(leaf_state)) 
+    stop("Please specify the leaf_state to select subset of cells")
+  # get mst
+  if (cds@dim_reduce_type == "DDRTree") {
+    pr_graph_cell_proj_mst <- minSpanningTree(cds)
+  }else {
+    pr_graph_cell_proj_mst <- cds@auxOrderingData[[cds@dim_reduce_type]]$cell_ordering_tree
+  }
+  # get root cell/state
+  root_cell <- cds@auxOrderingData[[cds@dim_reduce_type]]$root_cell
+  if(length(root_cell)==0){
+    root_cell <- rownames(pData(cds))[which.min(cds$Pseudotime)]
+    cds@auxOrderingData[[cds@dim_reduce_type]]$root_cell <- root_cell
+  }
+  root_state <- pData(cds)[root_cell, ]$State
+  pr_graph_root <- subset(pData(cds), State == root_state) # subset of pData corresponding to root cluster
+  if (cds@dim_reduce_type == "DDRTree") {
+    closest_vertex <- cds@auxOrderingData[["DDRTree"]]$pr_graph_cell_proj_closest_vertex
+    # Y values are the principal points/graph
+    root_cell_point_in_Y <- closest_vertex[row.names(pr_graph_root), ] # vertices in Y corresponding to root cluster 
+  }else {
+    root_cell_point_in_Y <- row.names(pr_graph_root)
+  }
+  root_cell <- names(which(degree(pr_graph_cell_proj_mst, v = root_cell_point_in_Y, 
+                                  mode = "all") == 1, useNames = T))[1] # pick new root cell (a leaf)
+  # above can sometimes return NA. As a backup: pick the original root cell (if its in the correct state)
+  # or pick the cell from that state with the lowest pseudotime
+  if(is.na(root_cell)){
+    rc <- rownames(pData(cds))[which.min(cds$Pseudotime)]
+    if(rc %in% names(degree(pr_graph_cell_proj_mst))){
+      root_cell <- rc
+    }else{
+      root_cell <- names(degree(pr_graph_cell_proj_mst))[which.min(cds$Pseudotime[colnames(cds) %in% names(degree(pr_graph_cell_proj_mst))])]
+    }
+  }
+  
+  curr_cell <- subset(pData(cds), State == leaf_state)
+  if (cds@dim_reduce_type == "DDRTree") {
+    closest_vertex <- cds@auxOrderingData[["DDRTree"]]$pr_graph_cell_proj_closest_vertex
+    curr_cell_point_in_Y <- closest_vertex[row.names(curr_cell), ] # vertices in Y corresopnding to leaf cluster
+  }else {
+    curr_cell_point_in_Y <- row.names(curr_cell)
+  }
+  curr_cell <- names(which(degree(pr_graph_cell_proj_mst, 
+                                  v = curr_cell_point_in_Y, mode = "all") == 1, 
+                           useNames = T))[1] # pick a leaf cell in leaf cluster
+  path_to_ancestor <- shortest_paths(pr_graph_cell_proj_mst, 
+                                     curr_cell, root_cell)  # extract path from leaf cell to root cell
+  path_to_ancestor <- names(unlist(path_to_ancestor$vpath)) # convert path to cell names
+  # path_to_ancestor has extra cells for some reason (more than just those along path)
+  
+  if (cds@dim_reduce_type == "DDRTree") {
+    closest_vertex <- cds@auxOrderingData[["DDRTree"]]$pr_graph_cell_proj_closest_vertex
+    ancestor_cells_for_branch <- row.names(closest_vertex)[which(V(pr_graph_cell_proj_mst)[closest_vertex]$name %in% 
+                                                                   path_to_ancestor)]
+    # ancestor_cells_for_branch has what we want
+  }
+  ancestor_cells_for_branch <- intersect(ancestor_cells_for_branch, 
+                                         colnames(cds)) # sanity check?
+  return(colnames(cds) %in% ancestor_cells_for_branch)
+}
+
+

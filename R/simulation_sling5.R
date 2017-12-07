@@ -1,48 +1,27 @@
 ###################################################
 ### Lineage Inference Simulation Study
-### Author: Kelly Street
+### Slingshot - other methods' best cases
+### Five Lineages
 ###################################################
-{
-  # library(splatter)
-  source('code/helper_functions.R')
-  # samples <- system('ls data/trapnell14/salmon/', intern=TRUE)
-  # hsmmCounts <- sapply(samples, function(samp){
-  #   fname <- paste0('data/trapnell14/salmon/',samp,'/quant.sf')
-  #   tab <- read.table(fname, header = TRUE)
-  #   return(as.numeric(tab$NumReads))
-  # })
-  # rownames(hsmmCounts) <- as.character(read.table(
-  #   paste0('data/trapnell14/salmon/',samples[1],'/quant.sf'), 
-  #   header = TRUE)$Name)
-  # m <- quantile(hsmmCounts[hsmmCounts > 0], probs = .5)
-  # # filter genes based on robust expression in at least 10% of cells
-  # gfilt <- apply(hsmmCounts,1,function(g){
-  #   sum(g > m) >= .10 * ncol(hsmmCounts)
-  # })
-  # # filter cells: no more than 70% zero counts
-  # # there seems to be a break around 70% separating two groups of cells
-  # sfilt <- apply(hsmmCounts[filt,],2,function(s){
-  #   mean(s == 0) <= .7
-  # })
-  # parHSMM <- splatEstimate(round(hsmmCounts[gfilt,sfilt]))
-  load('data/parHSMM.RData')
-} # load splatter and get parameters from HSMM data
 
+# setup
+source('R/helper_functions.R')
+load('data/parHSMM.RData')
+library(SingleCellExperiment)
+library(parallel)
+library(slingshot)
+library(destiny)
+library(fastICA)
+library(mclust)
 
+# five-lineage case setup
 cells.range <- seq(20,120, by=20)
 deProb.range <- (1:5)/10
 reps <- 10
 it.params <- cbind(rep(cells.range,each=reps*length(deProb.range)), rep(deProb.range,each=reps,times=length(cells.range)))
 nIts <- nrow(it.params)
-
 smallestOKcluster <- 5
 
-library(SingleCellExperiment)
-library(slingshot)
-library(mclust)
-library(parallel)
-
-# i = 40
 simResults_sling5 <- mclapply(1:nIts, function(i){
   print(paste('Iteration',i))
   {
@@ -75,16 +54,15 @@ simResults_sling5 <- mclapply(1:nIts, function(i){
   }# simulate, normalize data
   out <- NULL
   
+  # 4-D PCA - to ~match TSCAN (hybrid method is more "matched")
   pca <- prcomp(t(log1p(assays(sim)$normcounts)))
-  for(p in 3:5){
-    # clustering 1: bestMC
-    # Gaussian mixture modelling with best K chosen by BIC
-    X <- pca$x[,1:p]
-    X.orig <- X
-    mc <- Mclust(X)
-    cl <- mc$classification
-    minClusSize <- min(table(cl))
-    while(minClusSize < smallestOKcluster){
+  p <- 4
+  X <- pca$x[,1:p]
+  X.orig <- X
+  mc <- Mclust(X)
+  cl <- mc$classification
+  minClusSize <- min(table(cl))
+  while(minClusSize < smallestOKcluster){
       clTab <- table(cl)
       smallClus <- names(clTab)[clTab < smallestOKcluster]
       X <- X[! cl %in% smallClus, ]
@@ -92,73 +70,102 @@ simResults_sling5 <- mclapply(1:nIts, function(i){
       cl <- mc$classification
       minClusSize <- min(table(cl))
       if(nrow(X) < .5*nrow(X.orig)){ # prevent dropping too many cells
-        X <- X.orig
-        mc <- Mclust(X)
-        cl <- mc$classification
-        minClusSize <- smallestOKcluster + 1
+          X <- X.orig
+          mc <- Mclust(X)
+          cl <- mc$classification
+          minClusSize <- smallestOKcluster + 1
       }
-    }
-    clus1 <- as.character(cl[which.max(names(cl)==start.cell)])
-    
-    pstMC <- tryCatch({
-      slingshot(X, cl, start.clus = clus1)
-    }, error = function(e){ e })
-    if('error' %in% class(pstMC)){
-      out <- cbind(out,
-                   c(nlins = NA, rep(NA,ncol(truth))))
-    }else{
-      pstMC <- pseudotime(pstMC)
-      out <- cbind(out,
-                   c(nlins = ncol(pstMC), agreement.pair(truth, pstMC)))
-    }
-    colnames(out)[ncol(out)] <- paste0('sling5_pc',p,'_MCbest')
-    
-    ################################
-    
-    # clustering 2: bestKM
-    # Gaussian mixture modelling with best K chosen by silhouette width
-    X <- pca$x[,1:p]
-    X.orig <- X
-    K <- pickBestK(X, method='kmeans')
-    km <- kmeans(X, centers = K)
-    cl <- km$cluster
-    minClusSize <- min(table(cl))
-    while(minClusSize < smallestOKcluster){
-      clTab <- table(cl)
-      smallClus <- names(clTab)[clTab < smallestOKcluster]
-      X <- X[! cl %in% smallClus, ]
-      K <- pickBestK(X, method='kmeans')
-      km <- kmeans(X, centers = K)
-      cl <- km$cluster
-      minClusSize <- min(table(cl))
-      if(nrow(X) < .5*nrow(X.orig)){
-        X <- X.orig
-        K <- pickBestK(X, method='kmeans')
-        km <- kmeans(X, centers = K)
-        cl <- km$cluster
-        minClusSize <- smallestOKcluster + 1
-      }
-    }
-    clus1 <- as.character(cl[which.max(names(cl)==start.cell)])
-    
-    pstKM <- tryCatch({
-      slingshot(X, cl, start.clus = clus1)
-    }, error = function(e){ e })
-    if('error' %in% class(pstKM)){
-      out <- cbind(out,
-                   c(nlins = NA, rep(NA,ncol(truth))))
-    }else{
-      pstKM <- pseudotime(pstKM)
-      out <- cbind(out,
-                   c(nlins = ncol(pstKM), agreement.pair(truth, pstKM)))
-    }
-    colnames(out)[ncol(out)] <- paste0('sling5_pc',p,'_KMbest')
   }
+  clus1 <- as.character(cl[which.max(names(cl)==start.cell)])
+  pstPC <- tryCatch({
+      slingshot(X, cl, start.clus = clus1)
+  }, error = function(e){ e })
+  if('error' %in% class(pstPC)){
+      out <- cbind(out,
+                   c(nlins = NA, rep(NA,ncol(truth))))
+  }else{
+      pstPC <- pseudotime(pstPC)
+      out <- cbind(out,
+                   c(nlins = ncol(pstPC), agreement.pair(truth, pstPC)))
+  }
+  colnames(out)[ncol(out)] <- paste0('slingPC',p,'_MCbest')  
+  
+  # 4-D ICA - to match Monocle
+  p <- 4
+  ica <- fastICA::fastICA(pca$x, n.comp = p, method = 'C')$S
+  rownames(ica) <- rownames(pca$x)
+  X <- ica
+  X.orig <- X
+  mc <- Mclust(X)
+  cl <- mc$classification
+  minClusSize <- min(table(cl))
+  while(minClusSize < smallestOKcluster){
+    clTab <- table(cl)
+    smallClus <- names(clTab)[clTab < smallestOKcluster]
+    X <- X[! cl %in% smallClus, ]
+    mc <- Mclust(X)
+    cl <- mc$classification
+    minClusSize <- min(table(cl))
+    if(nrow(X) < .5*nrow(X.orig)){ # prevent dropping too many cells
+      X <- X.orig
+      mc <- Mclust(X)
+      cl <- mc$classification
+      minClusSize <- smallestOKcluster + 1
+    }
+  }
+  clus1 <- as.character(cl[which.max(names(cl)==start.cell)])
+  pstIC <- tryCatch({
+    slingshot(X, cl, start.clus = clus1)
+  }, error = function(e){ e })
+  if('error' %in% class(pstIC)){
+    out <- cbind(out,
+                 c(nlins = NA, rep(NA,ncol(truth))))
+  }else{
+    pstIC <- pseudotime(pstIC)
+    out <- cbind(out,
+                 c(nlins = ncol(pstIC), agreement.pair(truth, pstIC)))
+  }
+  colnames(out)[ncol(out)] <- paste0('slingIC',p,'_MCbest')
+  
+  # 8-D Diffusion Map - to match DPT
+  dm <- destiny::DiffusionMap(t(log1p(assays(sim)$normcounts)))@eigenvectors
+  rownames(dm) <- colnames(sim)
+  p <- 8
+  X <- dm[,1:p]
+  X.orig <- X
+  mc <- Mclust(X)
+  cl <- mc$classification
+  minClusSize <- min(table(cl))
+  while(minClusSize < smallestOKcluster){
+    clTab <- table(cl)
+    smallClus <- names(clTab)[clTab < smallestOKcluster]
+    X <- X[! cl %in% smallClus, ]
+    mc <- Mclust(X)
+    cl <- mc$classification
+    minClusSize <- min(table(cl))
+    if(nrow(X) < .5*nrow(X.orig)){ # prevent dropping too many cells
+      X <- X.orig
+      mc <- Mclust(X)
+      cl <- mc$classification
+      minClusSize <- smallestOKcluster + 1
+    }
+  }
+  clus1 <- as.character(cl[which.max(names(cl)==start.cell)])
+  pstDM <- tryCatch({
+    slingshot(X, cl, start.clus = clus1)
+  }, error = function(e){ e })
+  if('error' %in% class(pstDM)){
+    out <- cbind(out,
+                 c(nlins = NA, rep(NA,ncol(truth))))
+  }else{
+    pstDM <- pseudotime(pstDM)
+    out <- cbind(out,
+                 c(nlins = ncol(pstDM), agreement.pair(truth, pstDM)))
+  }
+  colnames(out)[ncol(out)] <- paste0('slingDM',p,'_MCbest')
   
   return(out)
-}, mc.cores = 16)
-
-save(simResults_sling5, file='temp_sling5.RData')
+}, mc.cores = 1)
 
 # format output
 nlins <- t(sapply(simResults_sling5, function(res){
@@ -172,3 +179,4 @@ taus <- lapply(1:ncol(simResults_sling5[[1]]),function(i){
 names(taus) <- colnames(simResults_sling5[[1]])
 
 save(nlins,taus, file='results_sling5.RData')
+

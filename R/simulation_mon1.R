@@ -1,57 +1,23 @@
 ###################################################
 ### Lineage Inference Simulation Study
-### Author: Kelly Street
+### Monocle 1
+### Two Lineages
 ###################################################
-{
-  # library(splatter)
-  source('code/helper_functions.R')
-  # samples <- system('ls data/trapnell14/salmon/', intern=TRUE)
-  # txCounts <- sapply(samples, function(samp){
-  #   fname <- paste0('data/trapnell14/salmon/',samp,'/quant.sf')
-  #   tab <- read.table(fname, header = TRUE)
-  #   return(as.numeric(tab$NumReads))
-  # })
-  # rownames(txCounts) <- as.character(read.table(
-  #   paste0('data/trapnell14/salmon/',samples[1],'/quant.sf'),
-  #   header = TRUE)$Name)
-  # rownames(txCounts) <- sapply(rownames(txCounts),function(n){
-  #   unlist(strsplit(n,split='[.]'))[1]
-  # })
-  # 
-  # library(EnsDb.Hsapiens.v86)
-  # map <- transcripts(EnsDb.Hsapiens.v86, columns = c('tx_name','gene_name'),
-  #                    return.type = 'data.frame')
-  # 
-  # txSub <- txCounts[rownames(txCounts) %in% map$tx_name,]
-  # gene_names <- map$gene_name[match(rownames(txSub), map$tx_id)]
-  # by_gene <- by(txSub, gene_names, colSums)
-  # hsmmCounts <- t(simplify2array(by_gene))
-  # 
-  # m <- quantile(hsmmCounts[hsmmCounts > 0], probs = .5)
-  # # filter genes based on robust expression in at least 10% of cells
-  # gfilt <- apply(hsmmCounts,1,function(g){
-  #   sum(g > m) >= .1 * ncol(hsmmCounts)
-  # })
-  # # filter cells: no more than 70% zero counts
-  # sfilt <- apply(hsmmCounts[gfilt,],2,function(s){
-  #   mean(s == 0) <= .7
-  # })
-  # parHSMM <- splatEstimate(round(hsmmCounts[gfilt,sfilt]))
-  load('data/parHSMM.RData')
-} # load splatter and get parameters from HSMM data
 
+# setup
+source('R/helper_functions.R')
+load('data/parHSMM.RData')
+library(SingleCellExperiment)
+library(parallel)
+library(monocle)
+
+# two-lineage case setup
 cells.range <- seq(40,500, by=20)
 deProb.range <- (1:5)/10
 reps <- 10
 it.params <- cbind(rep(cells.range,each=reps*length(deProb.range)), rep(deProb.range,each=reps,times=length(cells.range)))
 nIts <- nrow(it.params)
 smallestOKcluster <- 5
-
-library(SingleCellExperiment)
-# library(destiny)
-library(monocle)
-# library(TSCAN)
-library(parallel)
 
 simResults_mon1 <- mclapply(1:nIts, function(i){
   print(paste('Iteration',i))
@@ -107,9 +73,7 @@ simResults_mon1 <- mclapply(1:nIts, function(i){
   }
 
   return(out)
-}, mc.cores = 16)
-
-save(simResults_mon1, file='temp_mon1.RData')
+}, mc.cores = 1)
 
 # format output
 nlins <- t(sapply(simResults_mon1, function(res){
