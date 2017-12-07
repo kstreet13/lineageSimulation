@@ -5,6 +5,7 @@
 ###################################################
 
 # setup
+NCORES <- 1
 source('R/helper_functions.R')
 load('data/parHSMM.RData')
 library(SingleCellExperiment)
@@ -56,23 +57,26 @@ simResults_slingDimRed <- mclapply(1:nIts, function(i){
   for(p in 2:8){
     # ICA is slow and large matrices can cause errors in the underlying
     # Fortran code, so we do ICA on the full principal components matrix
-    ica <- fastICA::fastICA(pca$x, n.comp = p, method = 'C')
-    sds <- newSlingshotDataSet(ica$S)
+    ica <- fastICA::fastICA(pca$x, n.comp = p, method = 'C')$S
+    rownames(ica) <- rownames(pca$x)
+    sds <- newSlingshotDataSet(ica)
     out[[length(out)+1]] <- sds
     names(out)[length(out)] <- paste0('ica',p)
   }
   # Diffusion Map
-  dm <- destiny::DiffusionMap(t(log1p(assays(sim)$normcounts)))
+  dm <- destiny::DiffusionMap(t(log1p(assays(sim)$normcounts)))@eigenvectors
+  rownames(dm) <- rownames(pca$x)
   for(p in 2:8){
-    sds <- newSlingshotDataSet(dm@eigenvectors[,1:p])
+    sds <- newSlingshotDataSet(dm[,1:p])
     out[[length(out)+1]] <- sds
     names(out)[length(out)] <- paste0('dm',p)
   }
   # tSNE
   for(p in 2:8){
     # tSNE is similarly slow, so we use the matrix of principle components
-    tsne <- Rtsne::Rtsne(pca$x, dims = p)
-    sds <- newSlingshotDataSet(tsne$Y)
+    tsne <- Rtsne::Rtsne(pca$x, dims = p)$Y
+    rownames(tsne) <- rownames(pca$x)
+    sds <- newSlingshotDataSet(tsne)
     out[[length(out)+1]] <- sds
     names(out)[length(out)] <- paste0('tsne',p)
   }
@@ -119,7 +123,7 @@ simResults_slingDimRed <- mclapply(1:nIts, function(i){
   })
   
   return(res)
-}, mc.cores = 1)
+}, mc.cores = NCORES)
 
 # format output
 nlins <- t(sapply(simResults_slingDimRed, function(res){

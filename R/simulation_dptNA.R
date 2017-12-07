@@ -5,6 +5,7 @@
 ###################################################
 
 # setup
+NCORES <- 1
 source('R/helper_functions.R')
 load('data/parHSMM.RData')
 library(SingleCellExperiment)
@@ -52,7 +53,7 @@ simResults_dpt <- mclapply(1:nIts, function(i){
   bm <- dpt@branch
 
   return(table(bm[,1], useNA = "always"))  
-}, mc.cores = 16)
+}, mc.cores = NCORES)
 
 # format output
 dpt.na <- t(simplify2array(simResults_dpt))

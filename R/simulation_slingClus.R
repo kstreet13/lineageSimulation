@@ -5,6 +5,7 @@
 ###################################################
 
 # setup
+NCORES <- 1
 source('R/helper_functions.R')
 load('data/parHSMM.RData')
 library(SingleCellExperiment)
@@ -196,7 +197,7 @@ simResults_slingClus <- mclapply(1:nIts, function(i){
   } # HC_k
   
   return(out)
-}, mc.cores = 1)
+}, mc.cores = NCORES)
 
 # format output
 nlins <- t(sapply(simResults_slingClus, function(res){

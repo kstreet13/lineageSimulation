@@ -1,149 +1,11 @@
-waterfall_pst <-function(redX, k=NULL, seed=1, x.reverse=F){
-  source('~/Projects/slingshot_extras/WaterfallSupplement/Waterfall.R')
-  y <- redX
-  # r <- prcomp(t(x))
-  # y <- r$x*matrix(r$sdev^2/sum(r$sdev^2),nrow=nrow(r$x),ncol=ncol(r$x),byrow=T)
-  #y <-y[order(y[,1]),]
-  #u <- r$rotation
-  
-  # kmeans
-  set.seed(seed)
-  r <- kmeans(y,k)
-  z <- r$centers
-  z <- z[order(z[,1]),]
-  rownames(z) <-paste0("t",1:nrow(z))
-  m <- ape::mst(dist(z))
-  
-  t.names <-names(which(colSums(m!=0)==1))[1] # There are two ends, then use the left most one.
-  for (i in 1:nrow(m)){
-    t.names <-append(t.names,names(which(m[t.names[i],]==1))[which(names(which(m[t.names[i],]==1)) %notin% t.names)])
-  }
-  
-  y2d <-y[,1:2]
-  #y2d <-y2d[order(y2d[,1]),]
-  z2d <-z[,1:2]
-  z2d <-z2d[t.names,]
-  
-  time_start.i <-0
-  updatethis.dist <-rep(Inf,nrow(y2d))
-  updatethis.time <-rep(0,nrow(y2d))
-  update.updown <-rep(0,nrow(y2d))
-  pseudotime.flow <-c(0)
-  
-  for (i in 1:(nrow(z2d)-1)){
-    
-    # distance between this z2d.i and all y2d
-    dot.dist.i <-apply(y2d,1,function(X){dist(rbind(X,z2d[i,]))})
-    
-    # distance between this z2d.i-z2d.i+1 segment and "insider" y2d
-    inside_this_segment <-which(apply(y2d,1,function(X){inside_check.foo(z2d[i,],z2d[i+1,],X)}))
-    seg.dist.i <-rep(Inf,nrow(y2d))
-    seg.dist.i[inside_this_segment] <-apply(y2d,1,function(X){distance.foo(z2d[i,],z2d[i+1,],X)})[inside_this_segment]
-    
-    # intersect coordinate between this z2d.i-z2d.i+1 segment and all y2d
-    intersect.i <-t(apply(y2d,1,function(X){intersect.foo(z2d[i,],z2d[i+1,],X)}))
-    
-    # this z2d.i-z2d.i+1 segment's unit vector
-    seg_unit_vector <-unit_vector.foo(z2d[i,],z2d[i+1,])
-    
-    # UPDATE
-    # 2. idx for the shortest distance at this round (either dot or seg)
-    update.idx <-apply(cbind(dot.dist.i,seg.dist.i,updatethis.dist),1,which.min)
-    # 3. update the pseudotime for y2ds with the short distance from the z2d.i
-    updatethis.time[which(update.idx==1)] <-time_start.i
-    # 4. update the pseudotime for y2ds with the short distance from the z2d.i-z2d.i+1 segment
-    relative_cordinates <-t(apply(intersect.i[which(update.idx==2),],1,function(X){seg_unit_vector%*%(X-z2d[i,])}))
-    updatethis.time[which(update.idx==2)] <-time_start.i + relative_cordinates
-    # 1. update the shortest distance
-    updatethis.dist <-apply(cbind(dot.dist.i,seg.dist.i,updatethis.dist),1,min)
-    
-    update.updown[which(update.idx==1)] <-c(apply(y2d,1,function(X){crossvec_direction(z2d[i,],z2d[i+1,],X)})*dot.dist.i)[which(update.idx==1)]
-    update.updown[which(update.idx==2)] <-c(apply(y2d,1,function(X){crossvec_direction(z2d[i,],z2d[i+1,],X)})*seg.dist.i)[which(update.idx==2)]
-    
-    # update time for the next round
-    time_start.i <-time_start.i + dist(rbind(z2d[i,],z2d[i+1,]))
-    pseudotime.flow <-append(pseudotime.flow,time_start.i)
-  }
-  
-  # For the y2ds that are closest to the starting z2d
-  i=1
-  dot.dist.i <-apply(y2d,1,function(X){dist(rbind(X,z2d[i,]))})
-  if (length(start.idx <-which(dot.dist.i <= updatethis.dist))>0){
-    intersect.i <-t(apply(y2d,1,function(X){intersect.foo(z2d[i,],z2d[i+1,],X)}))
-    seg_unit_vector <-unit_vector.foo(z2d[i,],z2d[i+1,])
-    relative_cordinates <-0 + t(apply(intersect.i,1,function(X){seg_unit_vector %*% (X-z2d[i,])}))[start.idx]
-    updatethis.time[start.idx] <-relative_cordinates
-    seg.dist.i <-apply(y2d,1,function(X){distance.foo(z2d[i,],z2d[i+1,],X)})
-    update.updown[start.idx] <-c(apply(y2d,1,function(X){crossvec_direction(z2d[i,],z2d[i+1,],X)})*seg.dist.i)[start.idx]
-  }
-  # For the y2ds that are closest to the arriving z2d
-  i=nrow(z2d)
-  dot.dist.i <-apply(y2d,1,function(X){dist(rbind(X,z2d[i,]))})
-  if (length(arrive.idx <-which(dot.dist.i <= updatethis.dist))>0){
-    intersect.i <-t(apply(y2d,1,function(X){intersect.foo(z2d[i-1,],z2d[i,],X)}))
-    seg_unit_vector <-unit_vector.foo(z2d[i-1,],z2d[i,])
-    relative_cordinates <-time_start.i + as.numeric(t(apply(intersect.i,1,function(X){seg_unit_vector %*% (X-z2d[i,])})))[arrive.idx]
-    updatethis.time[arrive.idx] <-relative_cordinates
-    seg.dist.i <-apply(y2d,1,function(X){distance.foo(z2d[i-1,],z2d[i,],X)})
-    update.updown[arrive.idx] <-c(apply(y2d,1,function(X){crossvec_direction(z2d[i-1,],z2d[i,],X)})*seg.dist.i)[arrive.idx]
-  }
-  
-  pseudotime <-updatethis.time
-  pseudotime.y <-update.updown
-  pseudotime.flow <-pseudotime.flow
-  
-  if (x.reverse==T){
-    pseudotime <- -pseudotime
-    pseudotime.flow <- -pseudotime.flow
-  }
-  
-  pseudotime_range <-max(pseudotime)-min(pseudotime)
-  
-  pseudotime.flow <-pseudotime.flow-min(pseudotime)
-  pseudotime.flow <-pseudotime.flow/pseudotime_range
-  
-  pseudotime <-pseudotime-min(pseudotime)
-  pseudotime <-pseudotime/pseudotime_range
 
-  return(pseudotime)
-  
-}
+### Pseudotime functions
 
 slingshot_pst <- function(redX, clus.labels, ...){
   require(slingshot)
   l <- get_lineages(redX, clus.labels, ...)
   c <- get_curves(redX, clus.labels, l)
   out <- sapply(c,function(i){i$pseudotime})
-  return(out)
-}
-
-monocle_pst <- function(redX, num_paths = 1, reverse=FALSE, mst.out=FALSE){
-  require(monocle)
-  require(combinat)
-  require(igraph)
-  require(dplyr)
-  source('~/Documents/R_packages/monocle-release-master/R/methods-CellDataSet.R')
-  root_cell = NULL
-  dp <- as.matrix(dist(redX))
-  cellPairwiseDistances <- dp
-  gp <- graph.adjacency(dp, mode = "undirected", weighted = TRUE)
-  dp_mst <- minimum.spanning.tree(gp)
-  minSpanningTree <- dp_mst
-  next_node <<- 0
-  res <- pq_helper(dp_mst, use_weights = FALSE, root_node = root_cell)
-  cc_ordering <- extract_good_branched_ordering(res$subtree, 
-                                            res$root, cellPairwiseDistances, num_paths, reverse)
-  row.names(cc_ordering) <- cc_ordering$sample_name
-  pseudotime <- cc_ordering[row.names(redX), ]$pseudo_time
-  #state <- cc_ordering[row.names(pData(cds)), ]$cell_state
-  if(reverse){
-    pseudotime <- max(pseudotime) - pseudotime
-  }
-  if(mst.out){
-    out <- list(pseudotime = pseudotime, MST = minSpanningTree)
-  }else{
-    out <- pseudotime
-  }
   return(out)
 }
 
@@ -233,44 +95,6 @@ tscan_sling_pst <- function(counts, preproc = FALSE, clusNum = 2:9,
   pst <- pst[match(colnames(counts.orig), rownames(pst)), ,drop = FALSE]
   rownames(pst) <- colnames(counts.orig)
   return(pst)
-}
-
-embed <- function (X, genes_for_embedding = NULL, kernel = c("nn", "dist", "heat"),metric = c("correlation", "euclidean", "cosine"),nn = round(log(ncol(X))), eps = NULL, t = NULL,symmetrize = c("mean", "ceil", "floor"), measure_type = c("unorm", "norm"), p = 2){
-  if (is.null(genes_for_embedding)){
-    genes_for_embedding <- 1:nrow(X)
-  }
-  
-  W <- weighted_graph(X[genes_for_embedding, ], kernel = kernel, 
-                      metric = metric, nn = nn, eps = eps, t = t, symmetrize = symmetrize)
-  cellDist <- W
-  LE <- laplacian_eigenmap(W, measure_type = measure_type, 
-                           p = p)
-  return(as.matrix(LE$embedding))
-}
-
-embeddr_pst <- function(redX, clus.labels = NULL, cluster_to_use = NULL, reverse = FALSE, ...){
-  require(embeddr)
-  require(princurve)
-  redX <- as.data.frame(redX)
-  n_cells <- nrow(redX)
-  cells_in_cluster <- rep(TRUE, n_cells)
-  if(!is.null(cluster_to_use)){ 
-    cells_in_cluster <- clus.labels %in% cluster_to_use
-  }
-  Xcl <- redX[cells_in_cluster, ]
-  pc <- principal.curve(x = as.matrix(Xcl), ...)
-  pst <- pc$lambda
-  pst <- (pst - min(pst))/(max(pst) - min(pst))
-  #d <- sqrt(rowSums(X - pc$s)^2)
-  proj_dist <- pseudotime <- trajectory_1 <- trajectory_2 <- rep(NA,n_cells)
-  pseudotime[cells_in_cluster] <- pst
-  trajectory_1[cells_in_cluster] <- pc$s[, 1]
-  trajectory_2[cells_in_cluster] <- pc$s[, 2]
-  #proj_dist[cells_in_cluster] <- d
-  if(reverse){
-    pseudotime <- 1-pseudotime
-  }
-  return(pseudotime)
 }
 
 mon2_pst <- function(sim, ndims=2, PCgenes = FALSE){
@@ -410,6 +234,104 @@ mon1_pst <- function(sim, ndim = 2, num_paths = NULL, PCgenes = FALSE){
   return(pst)
 }
 
+mst_pst <- function(X, clusterLabels, clus1){
+    require(slingshot)
+    sds <- getLineages(X, clusterLabels, start.clus = clus1)
+    lineages <- sds@lineages
+    
+    L <- length(grep("Lineage",names(lineages))) # number of lineages
+    clusters <- unique(clusterLabels)
+    d <- dim(X); n <- d[1]; p <- d[2]
+    nclus <- length(clusters)
+    centers <- t(sapply(clusters,function(clID){
+        x.sub <- X[clusterLabels == clID, ,drop = FALSE]
+        return(colMeans(x.sub))
+    }))
+    if(p == 1){
+        centers <- t(centers)
+    }
+    rownames(centers) <- clusters
+    W <- sapply(seq_len(L),function(l){
+        as.numeric(clusterLabels %in% lineages[[l]])
+    }) # weighting matrix
+    rownames(W) <- rownames(X)
+    colnames(W) <- names(lineages)[seq_len(L)]
+    W.orig <- W
+    D <- W; D[,] <- NA
+    
+    # determine curve hierarchy
+    C <- as.matrix(sapply(lineages[seq_len(L)], function(lin) {
+        sapply(clusters, function(clID) {
+            as.numeric(clID %in% lin)
+        })
+    }))
+    rownames(C) <- clusters
+    segmnts <- unique(C[rowSums(C)>1,,drop = FALSE])
+    segmnts <- segmnts[order(rowSums(segmnts),decreasing = FALSE), ,
+                       drop = FALSE]
+    avg.order <- list()
+    for(i in seq_len(nrow(segmnts))){
+        idx <- segmnts[i,] == 1
+        avg.order[[i]] <- colnames(segmnts)[idx]
+        new.col <- rowMeans(segmnts[,idx, drop = FALSE])
+        segmnts <- cbind(segmnts[, !idx, drop = FALSE],new.col)
+        colnames(segmnts)[ncol(segmnts)] <- paste('average',i,sep='')
+    }
+    
+    # initial curves are piecewise linear paths through the tree
+    pcurves <- list()
+    for(l in seq_len(L)){
+        idx <- W[,l] > 0
+        clus.sub <- clusterLabels[idx]
+        line.initial <- centers[clusters %in% lineages[[l]], , 
+                                drop = FALSE]
+        line.initial <- line.initial[match(lineages[[l]],
+                                           rownames(line.initial)),  ,
+                                     drop = FALSE]
+        K <- nrow(line.initial)
+        # special case: single-cluster lineage
+        if(K == 1){
+            pca <- prcomp(X[idx, ,drop = FALSE])
+            ctr <- line.initial
+            line.initial <- rbind(ctr - 10*pca$sdev[1] * 
+                                      pca$rotation[,1], ctr, 
+                                  ctr + 10*pca$sdev[1] *
+                                      pca$rotation[,1])
+            curve <- get.lam(X[idx, ,drop = FALSE], s = line.initial,
+                             stretch = 9999)
+            # do this twice because all points should have projections
+            # on all lineages, but only those points on the lineage
+            # should extend it
+            pcurve <- get.lam(X, s = curve$s[curve$tag,], stretch=0)
+            pcurve$lambda <- pcurve$lambda - min(pcurve$lambda, 
+                                                 na.rm=TRUE)
+            # ^ force pseudotime to start at 0
+            pcurve$w <- W[,l]
+            pcurves[[l]] <- pcurve
+            D[,l] <- abs(pcurve$dist)
+            next
+        }
+        
+        curve <- get.lam(X[idx, ,drop = FALSE], s = line.initial,
+                         stretch = 9999)
+        
+        pcurve <- get.lam(X, s = curve$s[curve$tag, ,drop=FALSE], 
+                          stretch=0)
+        # force pseudotime to start at 0
+        pcurve$lambda <- pcurve$lambda - min(pcurve$lambda, 
+                                             na.rm=TRUE) 
+        pcurve$w <- W[,l]
+        pcurves[[l]] <- pcurve
+        D[,l] <- abs(pcurve$dist)
+    }
+    pst <- sapply(pcurves,function(x){
+        x$lambda
+    })
+    pst[W==0] <- NA
+    colnames(pst) <- paste0('Lineage',1:ncol(pst))
+    rownames(pst) <- rownames(X)
+    return(pst)
+}
 
 dpt_pst <- function(sim, num_paths = 'full'){
   num_paths <- as.character(num_paths)
@@ -544,107 +466,6 @@ dpt_pst <- function(sim, num_paths = 'full'){
   stop('Unrecognized num_paths argument.')
 }
 
-
-mst_pst <- function(X, clusterLabels, clus1){
-  require(slingshot)
-  sds <- getLineages(X, clusterLabels, start.clus = clus1)
-  lineages <- sds@lineages
-  
-  L <- length(grep("Lineage",names(lineages))) # number of lineages
-  clusters <- unique(clusterLabels)
-  d <- dim(X); n <- d[1]; p <- d[2]
-  nclus <- length(clusters)
-  centers <- t(sapply(clusters,function(clID){
-    x.sub <- X[clusterLabels == clID, ,drop = FALSE]
-    return(colMeans(x.sub))
-  }))
-  if(p == 1){
-    centers <- t(centers)
-  }
-  rownames(centers) <- clusters
-  W <- sapply(seq_len(L),function(l){
-    as.numeric(clusterLabels %in% lineages[[l]])
-  }) # weighting matrix
-  rownames(W) <- rownames(X)
-  colnames(W) <- names(lineages)[seq_len(L)]
-  W.orig <- W
-  D <- W; D[,] <- NA
-  
-  # determine curve hierarchy
-  C <- as.matrix(sapply(lineages[seq_len(L)], function(lin) {
-    sapply(clusters, function(clID) {
-      as.numeric(clID %in% lin)
-    })
-  }))
-  rownames(C) <- clusters
-  segmnts <- unique(C[rowSums(C)>1,,drop = FALSE])
-  segmnts <- segmnts[order(rowSums(segmnts),decreasing = FALSE), ,
-                     drop = FALSE]
-  avg.order <- list()
-  for(i in seq_len(nrow(segmnts))){
-    idx <- segmnts[i,] == 1
-    avg.order[[i]] <- colnames(segmnts)[idx]
-    new.col <- rowMeans(segmnts[,idx, drop = FALSE])
-    segmnts <- cbind(segmnts[, !idx, drop = FALSE],new.col)
-    colnames(segmnts)[ncol(segmnts)] <- paste('average',i,sep='')
-  }
-  
-  # initial curves are piecewise linear paths through the tree
-  pcurves <- list()
-  for(l in seq_len(L)){
-    idx <- W[,l] > 0
-    clus.sub <- clusterLabels[idx]
-    line.initial <- centers[clusters %in% lineages[[l]], , 
-                            drop = FALSE]
-    line.initial <- line.initial[match(lineages[[l]],
-                                       rownames(line.initial)),  ,
-                                 drop = FALSE]
-    K <- nrow(line.initial)
-    # special case: single-cluster lineage
-    if(K == 1){
-      pca <- prcomp(X[idx, ,drop = FALSE])
-      ctr <- line.initial
-      line.initial <- rbind(ctr - 10*pca$sdev[1] * 
-                              pca$rotation[,1], ctr, 
-                            ctr + 10*pca$sdev[1] *
-                              pca$rotation[,1])
-      curve <- get.lam(X[idx, ,drop = FALSE], s = line.initial,
-                        stretch = 9999)
-      # do this twice because all points should have projections
-      # on all lineages, but only those points on the lineage
-      # should extend it
-      pcurve <- get.lam(X, s = curve$s[curve$tag,], stretch=0)
-      pcurve$lambda <- pcurve$lambda - min(pcurve$lambda, 
-                                           na.rm=TRUE)
-      # ^ force pseudotime to start at 0
-      pcurve$w <- W[,l]
-      pcurves[[l]] <- pcurve
-      D[,l] <- abs(pcurve$dist)
-      next
-    }
-    
-    curve <- get.lam(X[idx, ,drop = FALSE], s = line.initial,
-                      stretch = 9999)
-    
-    pcurve <- get.lam(X, s = curve$s[curve$tag, ,drop=FALSE], 
-                       stretch=0)
-    # force pseudotime to start at 0
-    pcurve$lambda <- pcurve$lambda - min(pcurve$lambda, 
-                                         na.rm=TRUE) 
-    pcurve$w <- W[,l]
-    pcurves[[l]] <- pcurve
-    D[,l] <- abs(pcurve$dist)
-  }
-  pst <- sapply(pcurves,function(x){
-    x$lambda
-  })
-  pst[W==0] <- NA
-  colnames(pst) <- paste0('Lineage',1:ncol(pst))
-  rownames(pst) <- rownames(X)
-  return(pst)
-}
-
-
 ordering_genes_pca <- function(cds, which.pcs = c(2,3)){
   exprs_filtered <- t(t(exprs(cds)/pData(cds)$Size_Factor))
   nz_genes <- which(exprs_filtered != 0)
@@ -673,76 +494,7 @@ ordering_genes_pca <- function(cds, which.pcs = c(2,3)){
 }
 
 
-scaleAB <- function(x,a=0,b=1){
-  ((x-min(x,na.rm=TRUE))/(max(x,na.rm=TRUE)-min(x,na.rm=TRUE)))*(b-a)+a
-}
-col.stabilize <- function(x){
-  x <- 2*x
-  y <- 27*x*x*(1-x)/4
-  y[x > 2/3] <- 1
-  return(y)
-}
-
-parallel_plot <- function(x1,x2, names = NULL, ...){
-  x1 <- scaleAB(x1)
-  x2 <- scaleAB(x2)
-  if(length(x1) != length(x2)){
-    stop('pseudotime vectors must have same length')
-  }
-  plot.new(); plot.window(xlim=0:1,ylim=c(.5,2.5))
-  abline(h=1:2,xlab='Pseudotime')
-  axis(1,lty=0); axis(2, at=1:2, labels = names, lty=0)
-  
-  wdt <- scaleAB(abs(x1 - x2),1,4)
-  drk <- col.stabilize(abs(x1 - x2))
-  require(scales)
-  segments(x1,1, x2,2, col = alpha(1,drk), lwd=wdt)
-  segments(x1[is.na(x2)],rep(1,sum(is.na(x2))),x1[is.na(x2)],rep(4/3,sum(is.na(x2))))
-  points(x1,rep(1,length(x1)), pch=16, cex=1.5, ...)
-  segments(x2[is.na(x1)],rep(2,sum(is.na(x1))),x2[is.na(x1)],rep(5/3,sum(is.na(x2))))
-  points(x2,rep(2,length(x2)), pch=16, cex=1.5, ...)
-}
-violinplot <- function(x, col='grey50', names = 1:ncol(x), scale = 1, show.median = TRUE, 
-                       show.box = FALSE, box.big = 5, box.small = 2, bars = FALSE, 
-                       add = FALSE, xlab='', ylab='', width = 1, ...){
-  col <- rep(col, length.out = ncol(x))
-  width <- rep(width, length.out = ncol(x))
-  width <- width / mean(width)
-  
-  xat <- sapply(1:ncol(x),function(i){
-    sum(rep(width,each=2)[1:(2*i-1)])/2
-  })
-  
-  dens <- apply(x,2,density, na.rm=TRUE)
-  xs <- sapply(dens,function(d){d$x})
-  ys <- sapply(dens,function(d){d$y})
-  
-  ys <- ys * .5/max(ys,na.rm=TRUE) * scale
-  
-  if(!add){
-    plot(c(xat[1]-.4*width[1],xat[ncol(x)]+.4*width[ncol(x)]), range(xs,na.rm = TRUE), col='white', xaxt = 'n', xlab=xlab, ylab=ylab, ...)
-    axis(1, at=xat, labels = names, ...)
-  }
-  if(bars){
-    abline(v=xat)
-  }
-  for(i in 1:ncol(x)){
-    xx <- c(xat[i] - ys[,i] * width[i], xat[i] + rev(ys[,i]) * width[i])
-    yy <- c(xs[,i], rev(xs[,i]))
-    polygon(xx,yy, col = col[i])
-  }
-  if(show.box){
-    stats <- boxplot(x, plot=FALSE)$stats
-    segments(x0=xat,y0=stats[1,],y1=stats[5,], lwd=box.small, lend=2)
-    segments(x0=xat,y0=stats[2,],y1=stats[4,], lwd=box.big, lend=2)
-  }
-  if(show.median){
-    points(xat,apply(x,2,median,na.rm=TRUE), col=1, pch=16)
-    points(xat,apply(x,2,median,na.rm=TRUE), col='white', pch=1)
-  }
-  return(invisible(NULL))
-}
-
+### ACCURACY MEASURES
 
 # s_{\pi_1\pi_2} from TSCAN paper
 Spp <- function(pst1, pst2){
@@ -781,10 +533,7 @@ Spp <- function(pst1, pst2){
   return(s)
 }
 
-
-
-
-# evaluation
+# modified Kendall's tau
 kendall.mod <- function(pst1, pst2){
   # nicely formatted pst1, pst2
   spp <- function(p1,p2){
@@ -828,6 +577,8 @@ kendall.mod <- function(pst1, pst2){
   return(s)
 }
 
+# get agreement between a set of true lineages and inferred lineages,
+# using the maximum modified Kendall's tau
 agreement.pair <- function(truth, pst){
   truth <- as.matrix(truth)
   pst <- as.matrix(pst)
@@ -844,6 +595,9 @@ agreement.pair <- function(truth, pst){
 }
 
 
+### Other useful functions
+
+# full-quantile normalization
 FQnorm <- function(counts){
   rk <- apply(counts,2,rank)
   counts.sort <- apply(counts,2,sort)
@@ -852,16 +606,13 @@ FQnorm <- function(counts){
   rownames(norm) <- rownames(counts)
   return(norm)
 }
-UQnorm <- function(counts){
-  uqs <- apply(counts,2, quantile, probs=.75)
-  norm <- t(apply(counts,1,function(x){ x/uqs }))
-  rownames(norm) <- rownames(counts)
-  colnames(norm) <- colnames(counts)
-  return(norm)
+
+# useful scaling function
+scaleAB <- function(x,a=0,b=1){
+    ((x-min(x,na.rm=TRUE))/(max(x,na.rm=TRUE)-min(x,na.rm=TRUE)))*(b-a)+a
 }
 
-
-
+# pick best number of clusters based on silhouette width
 pickBestK <- function(reducedDim, method = 'kmeans', reps = 10){
   require(cluster)
   if(method == 'kmeans'){
@@ -884,8 +635,9 @@ pickBestK <- function(reducedDim, method = 'kmeans', reps = 10){
 }
 
 
-
-# function based on buildBranchCellDataSet
+# Extract an index denoting a single lineage in Monocle 2 output, corresponding
+# to the given leaf state/cluster.
+# Function based on code from buildBranchCellDataSet()
 getLineageID <- function(cds, leaf_state){
   require(igraph)
   # checks
